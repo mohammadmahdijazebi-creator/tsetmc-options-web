@@ -1,16 +1,11 @@
-// dashboard.js - نسخه آنلاین وب با پشتیبانی از CORS Proxy
+// dashboard.js - نسخه کامل و هماهنگ با index.html و GitHub Pages
 
 let putRows = [];
 let callRows = [];
-
 let currentMode = "put";
-let showAll = false;
-let scanTimer = null;
 let scanInProgress = false;
 
-// =====================================================
-// تابع کمکی برای آپدیت ایمن متون در صفحه
-// =====================================================
+// تابع تغییر وضعیت متنی
 function setStatusText(message) {
     const statusEl = document.getElementById("status");
     if (statusEl) {
@@ -18,295 +13,166 @@ function setStatusText(message) {
     }
 }
 
-// =====================================================
-// اسکن اطلاعات
-// =====================================================
-
+// تابع دریافت و پردازش داده‌ها
 async function scan() {
-
     if (scanInProgress) return;
     scanInProgress = true;
 
-    setStatusText("در حال دریافت و پردازش اطلاعات TSETMC...");
+    setStatusText("در حال دریافت اطلاعات از TSETMC...");
 
     try {
-
-        // استفاده از پراکسی جهت دور زدن محدودیت CORS مرورگر در وب‌سایت آنلاین
+        // آدرس API سازمان بورس به همراه پراکسی جهت دور زدن CORS
         const targetUrl = "https://cdn.tsetmc.com/api/Instrument/GetInstrumentOptionMarketWatch/1";
-        const proxyUrl = "https://corsproxy.io/?" + encodeURIComponent(targetUrl);
+        const proxyUrl = "https://api.allorigins.win/raw?url=" + encodeURIComponent(targetUrl);
 
         const response = await fetch(proxyUrl);
-
         if (!response.ok) {
-            throw new Error("خطا در دریافت اطلاعات: کد " + response.status);
+            throw new Error("خطای ارتباط با سرور: " + response.status);
         }
 
         const data = await response.json();
-
         const records = data.instrumentOptMarketWatch || [];
 
-        const minVolumeInput = document.getElementById("minVolume");
-        const minVolume = minVolumeInput ? (Number(minVolumeInput.value) || 5000) : 5000;
+        const minVolumeEl = document.getElementById("minVolume");
+        const minVolume = minVolumeEl ? (Number(minVolumeEl.value) || 0) : 0;
 
         const puts = [];
         const calls = [];
 
         for (const r of records) {
-
             const underlying = Number(r.pDrCotVal_UA) || 0;
             const strike = Number(r.strikePrice) || 0;
 
-            // ================================
-            // PUT - اختیار فروش
-            // ================================
-
+            // اختیار فروش (PUT)
             if (r.lVal18AFC_P) {
-
                 const closeP = Number(r.pClosing_P) || 0;
                 const volP = Number(r.tVol_P) || 0;
-                const openIntP = Number(r.notSettleModVar_P) || 0;
-
-                if (closeP > 0 && strike > 0) {
-
+                if (volP >= minVolume && closeP > 0 && strike > 0) {
                     const intrinsic = Math.max(0, strike - underlying);
                     const timeValue = Math.max(0, closeP - intrinsic);
-
                     const leverage = underlying > 0 ? (underlying / closeP) : 0;
 
-                    const moneyStatus =
-                        underlying < strike ? "در سود (ITM)" :
-                        underlying === strike ? "بی‌تفاوت (ATM)" :
-                        "در زیان (OTM)";
-
-                    const valueM = Math.round((closeP * volP) / 1000000);
-
                     puts.push({
-
                         symbol: r.lVal18AFC_P,
-                        underlyingSymbol: r.lVal18AFC_UA || "-",
-
+                        uaSymbol: r.lVal18AFC_UA || "-",
                         strike: strike,
                         days: r.remDay || 0,
-
                         close: closeP,
-                        underlying: underlying,
-
+                        uaPrice: underlying,
                         vol: volP,
-                        valueM: valueM,
-
-                        openInt: openIntP,
-
-                        intrinsic: intrinsic,
-                        timeValue: timeValue,
-
+                        valueM: Math.round((closeP * volP) / 1000000),
+                        openInt: Number(r.notSettleModVar_P) || 0,
                         leverage: leverage.toFixed(1),
-
-                        moneyStatus: moneyStatus
-
+                        status: underlying < strike ? "در سود" : (underlying === strike ? "بی‌تفاوت" : "در زیان")
                     });
-
                 }
-
             }
 
-            // ================================
-            // CALL - اختیار خرید
-            // ================================
-
+            // اختیار خرید (CALL)
             if (r.lVal18AFC_C) {
-
                 const closeC = Number(r.pClosing_C) || 0;
                 const volC = Number(r.tVol_C) || 0;
-                const openIntC = Number(r.notSettleModVar_C) || 0;
-
-                if (closeC > 0 && strike > 0) {
-
+                if (volC >= minVolume && closeC > 0 && strike > 0) {
                     const intrinsic = Math.max(0, underlying - strike);
                     const timeValue = Math.max(0, closeC - intrinsic);
-
                     const leverage = underlying > 0 ? (underlying / closeC) : 0;
 
-                    const moneyStatus =
-                        underlying > strike ? "در سود (ITM)" :
-                        underlying === strike ? "بی‌تفاوت (ATM)" :
-                        "در زیان (OTM)";
-
-                    const valueM = Math.round((closeC * volC) / 1000000);
-
                     calls.push({
-
                         symbol: r.lVal18AFC_C,
-                        underlyingSymbol: r.lVal18AFC_UA || "-",
-
+                        uaSymbol: r.lVal18AFC_UA || "-",
                         strike: strike,
                         days: r.remDay || 0,
-
                         close: closeC,
-                        underlying: underlying,
-
+                        uaPrice: underlying,
                         vol: volC,
-                        valueM: valueM,
-
-                        openInt: openIntC,
-
-                        intrinsic: intrinsic,
-                        timeValue: timeValue,
-
+                        valueM: Math.round((closeC * volC) / 1000000),
+                        openInt: Number(r.notSettleModVar_C) || 0,
                         leverage: leverage.toFixed(1),
-
-                        moneyStatus: moneyStatus
-
+                        status: underlying > strike ? "در سود" : (underlying === strike ? "بی‌تفاوت" : "در زیان")
                     });
-
                 }
-
             }
-
         }
 
         putRows = puts;
         callRows = calls;
 
-        renderTable();
-        updateSummary();
+        // به‌روزرسانی کارت‌های آماری بالای صفحه
+        const putCountEl = document.getElementById("putCount");
+        const callCountEl = document.getElementById("callCount");
+        const totalCountEl = document.getElementById("totalCount");
+        const lastUpdateEl = document.getElementById("lastUpdate");
+
+        if (putCountEl) putCountEl.innerText = puts.length.toLocaleString('fa-IR');
+        if (callCountEl) callCountEl.innerText = calls.length.toLocaleString('fa-IR');
+        if (totalCountEl) totalCountEl.innerText = (puts.length + calls.length).toLocaleString('fa-IR');
 
         const now = new Date();
         const timeStr = now.toLocaleTimeString('fa-IR');
+        if (lastUpdateEl) lastUpdateEl.innerText = timeStr;
 
-        setStatusText("آخرین بروزرسانی: " + timeStr);
+        renderTable();
+        setStatusText("اطلاعات با موفقیت دریافت شد (" + timeStr + ")");
 
     } catch (err) {
-
-        console.error(err);
-        setStatusText("خطا در دریافت اطلاعات از TSETMC");
-
+        console.error("Scan Error:", err);
+        setStatusText("خطا در دریافت اطلاعات: لطفا مجددا تلاش کنید.");
     } finally {
-
         scanInProgress = false;
-
     }
-
 }
 
-
-// =====================================================
-// رندر جدول
-// =====================================================
-
+// نمایش سطرها در جدول
 function renderTable() {
-
-    const tbody = document.getElementById("rows");
+    const tbody = document.querySelector("table tbody") || document.getElementById("rows");
     if (!tbody) return;
 
     tbody.innerHTML = "";
-
     const list = currentMode === "put" ? putRows : callRows;
 
-    const symbolFilterInput = document.getElementById("symbolFilter");
-    const underlyingFilterSelect = document.getElementById("underlyingFilter");
-
-    const symbolFilter = symbolFilterInput ? symbolFilterInput.value.trim() : "";
-    const underlyingFilter = underlyingFilterSelect ? underlyingFilterSelect.value : "ALL";
-
-    const filtered = list.filter(r => {
-
-        if (symbolFilter && !r.symbol.includes(symbolFilter)) {
-            return false;
-        }
-
-        if (underlyingFilter !== "ALL" && r.underlyingSymbol !== underlyingFilter) {
-            return false;
-        }
-
-        return true;
-
-    });
-
-    for (const r of filtered) {
-
+    for (const item of list) {
         const tr = document.createElement("tr");
-
         tr.innerHTML = `
-            <td>${currentMode === "put" ? "اختیار فروش" : "اختیار خرید"}</td>
-            <td><b>${r.symbol}</b></td>
-            <td>${r.underlyingSymbol}</td>
-            <td>${r.strike.toLocaleString('fa-IR')}</td>
-            <td>${r.days} روز</td>
-            <td>${r.close.toLocaleString('fa-IR')}</td>
-            <td>${r.underlying.toLocaleString('fa-IR')}</td>
-            <td>${r.vol.toLocaleString('fa-IR')}</td>
-            <td>${r.valueM.toLocaleString('fa-IR')}</td>
-            <td>${r.openInt.toLocaleString('fa-IR')}</td>
-            <td><span class="badge ${getBadgeClass(r.moneyStatus)}">${r.moneyStatus}</span></td>
-            <td>${r.leverage}x</td>
+            <td><b>${item.symbol}</b></td>
+            <td>${item.uaSymbol}</td>
+            <td>${item.strike.toLocaleString('fa-IR')}</td>
+            <td>${item.close.toLocaleString('fa-IR')}</td>
+            <td>${item.uaPrice.toLocaleString('fa-IR')}</td>
+            <td>${item.vol.toLocaleString('fa-IR')}</td>
+            <td>${item.days}</td>
+            <td>${item.status}</td>
+            <td>${item.leverage}</td>
         `;
-
         tbody.appendChild(tr);
-
     }
-
 }
 
-function getBadgeClass(status) {
-    if (status.includes("ITM")) return "bg-success";
-    if (status.includes("ATM")) return "bg-warning text-dark";
-    return "bg-danger";
-}
-
-
-// =====================================================
-// خلاصه آماری
-// =====================================================
-
-function updateSummary() {
-
-    let totalCallValue = 0;
-    let totalPutValue = 0;
-
-    for (const r of callRows) totalCallValue += r.valueM;
-    for (const r of putRows) totalPutValue += r.valueM;
-
-    const callValEl = document.getElementById("totalCallValue");
-    const putValEl = document.getElementById("totalPutValue");
-    const activeCountEl = document.getElementById("activeCount");
-
-    if (callValEl) callValEl.innerText = totalCallValue.toLocaleString('fa-IR') + " میلیون";
-    if (putValEl) putValEl.innerText = totalPutValue.toLocaleString('fa-IR') + " میلیون";
-    if (activeCountEl) activeCountEl.innerText = (callRows.length + putRows.length).toLocaleString('fa-IR');
-
-}
-
-
-// =====================================================
-// رویدادها و راه اندازی اولیه
-// =====================================================
-
+// اتصال رویدادها
 document.addEventListener("DOMContentLoaded", () => {
-
-    const scanBtn = document.getElementById("scanBtn");
+    // دکمه اسکن جدید
+    const scanBtn = document.getElementById("scanButton");
     if (scanBtn) {
         scanBtn.addEventListener("click", scan);
     }
 
-    const typeFilter = document.getElementById("typeFilter");
-    if (typeFilter) {
-        typeFilter.addEventListener("change", (e) => {
-            currentMode = e.target.value;
+    // دکمه‌های فیلتر پوت و کال
+    const showPutBtn = document.getElementById("showPutButton");
+    const showCallBtn = document.getElementById("showCallButton");
+
+    if (showPutBtn) {
+        showPutBtn.addEventListener("click", () => {
+            currentMode = "put";
             renderTable();
         });
     }
 
-    const symbolFilter = document.getElementById("symbolFilter");
-    if (symbolFilter) {
-        symbolFilter.addEventListener("input", renderTable);
+    if (showCallBtn) {
+        showCallBtn.addEventListener("click", () => {
+            currentMode = "call";
+            renderTable();
+        });
     }
 
-    const underlyingFilter = document.getElementById("underlyingFilter");
-    if (underlyingFilter) {
-        underlyingFilter.addEventListener("change", renderTable);
-    }
-
-    // اسکن اولیه خودکار
+    // اسکن خودکار هنگام باز شدن صفحه
     scan();
-
 });
