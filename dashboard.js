@@ -1,519 +1,312 @@
-let putData = [];
-let callData = [];
+// dashboard.js - نسخه آنلاین وب با پشتیبانی از CORS Proxy
 
-// تابع هوشمند واکشی دیتا با پروکسی Vercel و پشتیبان مستقیم
-async function fetchTsetmcData(endpointPath) {
-    const proxyUrl = `/api/tsetmc/${endpointPath}`;
-    const directUrl = `https://cdn.tsetmc.com/api/${endpointPath}`;
+let putRows = [];
+let callRows = [];
 
-    try {
-        const res = await fetch(proxyUrl);
-        if (res.ok) {
-            return await res.json();
-        }
-    } catch (e) {
-        console.warn('Proxy fetch failed, trying direct...', e);
+let currentMode = "put";
+let showAll = false;
+let scanTimer = null;
+let scanInProgress = false;
+
+// =====================================================
+// تابع کمکی برای آپدیت ایمن متون در صفحه
+// =====================================================
+function setStatusText(message) {
+    const statusEl = document.getElementById("status");
+    if (statusEl) {
+        statusEl.innerText = message;
     }
-
-    // در صورتی که کاربر داخل شبکه بدون محدودیت باشد
-    const directRes = await fetch(directUrl);
-    if (!directRes.ok) {
-        throw new Error(`خطا در دریافت اطلاعات: ${directRes.status}`);
-    }
-    return await directRes.json();
 }
+
+// =====================================================
+// اسکن اطلاعات
+// =====================================================
 
 async function scan() {
 
-    const status = document.getElementById("status");
-    const scanButton = document.getElementById("scanButton");
+    if (scanInProgress) return;
+    scanInProgress = true;
 
-    status.innerText = "در حال دریافت اطلاعات از TSETMC...";
-    scanButton.disabled = true;
+    setStatusText("در حال دریافت و پردازش اطلاعات TSETMC...");
 
     try {
 
-        const data = await fetchTsetmcData("Instrument/GetInstrumentOptionMarketWatch/1");
+        // استفاده از پراکسی جهت دور زدن محدودیت CORS مرورگر در وب‌سایت آنلاین
+        const targetUrl = "https://cdn.tsetmc.com/api/Instrument/GetInstrumentOptionMarketWatch/1";
+        const proxyUrl = "https://corsproxy.io/?" + encodeURIComponent(targetUrl);
 
-        const list = data.instrumentOptMarketWatch;
+        const response = await fetch(proxyUrl);
 
-        putData = [];
-        callData = [];
-
-        const minVolumeInput =
-            document.getElementById("minVolume");
-
-        const minVolume =
-            minVolumeInput && !isNaN(minVolumeInput.value)
-                ? Number(minVolumeInput.value)
-                : 5000;
-
-        list.forEach(item => {
-
-            const underlyingPrice =
-                item.pClosing_U;
-
-            const strike =
-                item.strikePrice;
-
-            const days =
-                item.remainedDay;
-
-            const expDate =
-                item.contractEndDate;
-
-            // ================= PUT =================
-
-            if (item.lVal18AFC_P) {
-
-                const vol =
-                    item.qTotTran5J_P;
-
-                const last =
-                    item.pDrCotVal_P;
-
-                if (vol > minVolume && last > 0) {
-
-                    const intrinsic =
-                        Math.max(
-                            0,
-                            strike - underlyingPrice
-                        );
-
-                    const effectiveSell =
-                        strike - last;
-
-                    const diff =
-                        effectiveSell - underlyingPrice;
-
-                    const percent =
-                        underlyingPrice > 0
-                            ? (diff / underlyingPrice) * 100
-                            : 0;
-
-                    putData.push({
-
-                        symbol:
-                            item.lVal18AFC_P,
-
-                        underlying:
-                            item.lVal18AFC_U,
-
-                        strike:
-                            strike,
-
-                        last:
-                            last,
-
-                        volume:
-                            vol,
-
-                        intrinsic:
-                            intrinsic,
-
-                        effectiveSell:
-                            effectiveSell,
-
-                        percent:
-                            percent,
-
-                        days:
-                            days,
-
-                        expDate:
-                            expDate
-
-                    });
-
-                }
-
-            }
-
-            // ================= CALL =================
-
-            if (item.lVal18AFC_C) {
-
-                const vol =
-                    item.qTotTran5J_C;
-
-                const last =
-                    item.pDrCotVal_C;
-
-                if (vol > minVolume && last > 0) {
-
-                    const intrinsic =
-                        Math.max(
-                            0,
-                            underlyingPrice - strike
-                        );
-
-                    const effectiveBuy =
-                        strike + last;
-
-                    const diff =
-                        effectiveBuy - underlyingPrice;
-
-                    const percent =
-                        underlyingPrice > 0
-                            ? (diff / underlyingPrice) * 100
-                            : 0;
-
-                    callData.push({
-
-                        symbol:
-                            item.lVal18AFC_C,
-
-                        underlying:
-                            item.lVal18AFC_U,
-
-                        strike:
-                            strike,
-
-                        last:
-                            last,
-
-                        volume:
-                            vol,
-
-                        intrinsic:
-                            intrinsic,
-
-                        effectiveBuy:
-                            effectiveBuy,
-
-                        percent:
-                            percent,
-
-                        days:
-                            days,
-
-                        expDate:
-                            expDate
-
-                    });
-
-                }
-
-            }
-
-        });
-
-        sortPut();
-        sortCall();
-
-        renderPut();
-        renderCall();
-
-        document.getElementById("putCount").innerText =
-            putData.length;
-
-        document.getElementById("callCount").innerText =
-            callData.length;
-
-        document.getElementById("totalCount").innerText =
-            putData.length + callData.length;
-
-        document.getElementById("lastUpdate").innerText =
-            new Date().toLocaleTimeString("fa-IR");
-
-        status.innerText =
-            "اسکن با موفقیت انجام شد ✅";
-
-        // ارسال رخداد برای ماژول استراتژی و سود/زیان
-        document.dispatchEvent(new CustomEvent('optionScanUpdated', {
-            detail: {
-                rawList: list,
-                putData: putData,
-                callData: callData
-            }
-        }));
-
-    }
-
-    catch (error) {
-
-        status.innerText =
-            "خطا در دریافت اطلاعات: " + error.message;
-
-        console.error(error);
-
-    }
-
-    finally {
-
-        scanButton.disabled = false;
-
-    }
-
-}
-
-function sortPut() {
-
-    putData.sort((a, b) =>
-        b.percent - a.percent
-    );
-
-}
-
-function sortCall() {
-
-    callData.sort((a, b) =>
-        a.percent - b.percent
-    );
-
-}
-
-function formatNumber(num) {
-
-    if (!num && num !== 0) return "-";
-
-    return Math.round(num)
-        .toLocaleString("fa-IR");
-
-}
-
-function formatPercent(num) {
-
-    if (!num && num !== 0) return "-";
-
-    const fixed =
-        num.toFixed(2);
-
-    return Number(fixed)
-        .toLocaleString("fa-IR", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-        }) + " %";
-
-}
-
-function renderPut() {
-
-    const tbody =
-        document.getElementById("putTableBody");
-
-    tbody.innerHTML = "";
-
-    putData.forEach((row, index) => {
-
-        const tr =
-            document.createElement("tr");
-
-        const cls =
-            row.percent > 0
-                ? "positive"
-                : row.percent < 0
-                    ? "negative"
-                    : "zero";
-
-        tr.innerHTML = `
-
-            <td>${(index + 1).toLocaleString("fa-IR")}</td>
-
-            <td><strong>${row.symbol}</strong></td>
-
-            <td>${row.underlying}</td>
-
-            <td>${formatNumber(row.strike)}</td>
-
-            <td>${formatNumber(row.last)}</td>
-
-            <td>${formatNumber(row.volume)}</td>
-
-            <td>${formatNumber(row.intrinsic)}</td>
-
-            <td>${formatNumber(row.effectiveSell)}</td>
-
-            <td class="${cls}">${formatPercent(row.percent)}</td>
-
-            <td>${row.expDate}</td>
-
-            <td>${Number(row.days).toLocaleString("fa-IR")}</td>
-
-        `;
-
-        tbody.appendChild(tr);
-
-    });
-
-}
-
-function renderCall() {
-
-    const tbody =
-        document.getElementById("callTableBody");
-
-    tbody.innerHTML = "";
-
-    callData.forEach((row, index) => {
-
-        const tr =
-            document.createElement("tr");
-
-        const cls =
-            row.percent < 0
-                ? "positive"
-                : row.percent > 0
-                    ? "negative"
-                    : "zero";
-
-        tr.innerHTML = `
-
-            <td>${(index + 1).toLocaleString("fa-IR")}</td>
-
-            <td><strong>${row.symbol}</strong></td>
-
-            <td>${row.underlying}</td>
-
-            <td>${formatNumber(row.strike)}</td>
-
-            <td>${formatNumber(row.last)}</td>
-
-            <td>${formatNumber(row.volume)}</td>
-
-            <td>${formatNumber(row.intrinsic)}</td>
-
-            <td>${formatNumber(row.effectiveBuy)}</td>
-
-            <td class="${cls}">${formatPercent(row.percent)}</td>
-
-            <td>${row.expDate}</td>
-
-            <td>${Number(row.days).toLocaleString("fa-IR")}</td>
-
-        `;
-
-        tbody.appendChild(tr);
-
-    });
-
-}
-
-function showPutOnly() {
-
-    document.getElementById("putSection")
-        .classList.remove("hidden");
-
-    document.getElementById("callSection")
-        .classList.add("hidden");
-
-    document.getElementById("strategySection")
-        .classList.add("hidden");
-
-    document.getElementById("payoffSection")
-        .classList.add("hidden");
-
-    document.getElementById("underlyingSection")
-        .classList.add("hidden");
-
-    document.getElementById("marketSummarySection")
-        .classList.add("hidden");
-
-    setActiveButton("showPutButton");
-
-}
-
-function showCallOnly() {
-
-    document.getElementById("putSection")
-        .classList.add("hidden");
-
-    document.getElementById("callSection")
-        .classList.remove("hidden");
-
-    document.getElementById("strategySection")
-        .classList.add("hidden");
-
-    document.getElementById("payoffSection")
-        .classList.add("hidden");
-
-    document.getElementById("underlyingSection")
-        .classList.add("hidden");
-
-    document.getElementById("marketSummarySection")
-        .classList.add("hidden");
-
-    setActiveButton("showCallButton");
-
-}
-
-function showAll() {
-
-    document.getElementById("putSection")
-        .classList.remove("hidden");
-
-    document.getElementById("callSection")
-        .classList.remove("hidden");
-
-    document.getElementById("strategySection")
-        .classList.add("hidden");
-
-    document.getElementById("payoffSection")
-        .classList.add("hidden");
-
-    document.getElementById("underlyingSection")
-        .classList.add("hidden");
-
-    document.getElementById("marketSummarySection")
-        .classList.add("hidden");
-
-    setActiveButton("showAllButton");
-
-}
-
-function setActiveButton(buttonId) {
-
-    const buttons = [
-        "showPutButton",
-        "showCallButton",
-        "showAllButton",
-        "strategyButton",
-        "payoffButton",
-        "underlyingButton",
-        "marketSummaryButton"
-    ];
-
-    buttons.forEach(id => {
-        const btn = document.getElementById(id);
-        if (btn) {
-            btn.classList.remove("active");
+        if (!response.ok) {
+            throw new Error("خطا در دریافت اطلاعات: کد " + response.status);
         }
-    });
 
-    const activeBtn = document.getElementById(buttonId);
-    if (activeBtn) {
-        activeBtn.classList.add("active");
+        const data = await response.json();
+
+        const records = data.instrumentOptMarketWatch || [];
+
+        const minVolumeInput = document.getElementById("minVolume");
+        const minVolume = minVolumeInput ? (Number(minVolumeInput.value) || 5000) : 5000;
+
+        const puts = [];
+        const calls = [];
+
+        for (const r of records) {
+
+            const underlying = Number(r.pDrCotVal_UA) || 0;
+            const strike = Number(r.strikePrice) || 0;
+
+            // ================================
+            // PUT - اختیار فروش
+            // ================================
+
+            if (r.lVal18AFC_P) {
+
+                const closeP = Number(r.pClosing_P) || 0;
+                const volP = Number(r.tVol_P) || 0;
+                const openIntP = Number(r.notSettleModVar_P) || 0;
+
+                if (closeP > 0 && strike > 0) {
+
+                    const intrinsic = Math.max(0, strike - underlying);
+                    const timeValue = Math.max(0, closeP - intrinsic);
+
+                    const leverage = underlying > 0 ? (underlying / closeP) : 0;
+
+                    const moneyStatus =
+                        underlying < strike ? "در سود (ITM)" :
+                        underlying === strike ? "بی‌تفاوت (ATM)" :
+                        "در زیان (OTM)";
+
+                    const valueM = Math.round((closeP * volP) / 1000000);
+
+                    puts.push({
+
+                        symbol: r.lVal18AFC_P,
+                        underlyingSymbol: r.lVal18AFC_UA || "-",
+
+                        strike: strike,
+                        days: r.remDay || 0,
+
+                        close: closeP,
+                        underlying: underlying,
+
+                        vol: volP,
+                        valueM: valueM,
+
+                        openInt: openIntP,
+
+                        intrinsic: intrinsic,
+                        timeValue: timeValue,
+
+                        leverage: leverage.toFixed(1),
+
+                        moneyStatus: moneyStatus
+
+                    });
+
+                }
+
+            }
+
+            // ================================
+            // CALL - اختیار خرید
+            // ================================
+
+            if (r.lVal18AFC_C) {
+
+                const closeC = Number(r.pClosing_C) || 0;
+                const volC = Number(r.tVol_C) || 0;
+                const openIntC = Number(r.notSettleModVar_C) || 0;
+
+                if (closeC > 0 && strike > 0) {
+
+                    const intrinsic = Math.max(0, underlying - strike);
+                    const timeValue = Math.max(0, closeC - intrinsic);
+
+                    const leverage = underlying > 0 ? (underlying / closeC) : 0;
+
+                    const moneyStatus =
+                        underlying > strike ? "در سود (ITM)" :
+                        underlying === strike ? "بی‌تفاوت (ATM)" :
+                        "در زیان (OTM)";
+
+                    const valueM = Math.round((closeC * volC) / 1000000);
+
+                    calls.push({
+
+                        symbol: r.lVal18AFC_C,
+                        underlyingSymbol: r.lVal18AFC_UA || "-",
+
+                        strike: strike,
+                        days: r.remDay || 0,
+
+                        close: closeC,
+                        underlying: underlying,
+
+                        vol: volC,
+                        valueM: valueM,
+
+                        openInt: openIntC,
+
+                        intrinsic: intrinsic,
+                        timeValue: timeValue,
+
+                        leverage: leverage.toFixed(1),
+
+                        moneyStatus: moneyStatus
+
+                    });
+
+                }
+
+            }
+
+        }
+
+        putRows = puts;
+        callRows = calls;
+
+        renderTable();
+        updateSummary();
+
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('fa-IR');
+
+        setStatusText("آخرین بروزرسانی: " + timeStr);
+
+    } catch (err) {
+
+        console.error(err);
+        setStatusText("خطا در دریافت اطلاعات از TSETMC");
+
+    } finally {
+
+        scanInProgress = false;
+
     }
 
 }
+
+
+// =====================================================
+// رندر جدول
+// =====================================================
+
+function renderTable() {
+
+    const tbody = document.getElementById("rows");
+    if (!tbody) return;
+
+    tbody.innerHTML = "";
+
+    const list = currentMode === "put" ? putRows : callRows;
+
+    const symbolFilterInput = document.getElementById("symbolFilter");
+    const underlyingFilterSelect = document.getElementById("underlyingFilter");
+
+    const symbolFilter = symbolFilterInput ? symbolFilterInput.value.trim() : "";
+    const underlyingFilter = underlyingFilterSelect ? underlyingFilterSelect.value : "ALL";
+
+    const filtered = list.filter(r => {
+
+        if (symbolFilter && !r.symbol.includes(symbolFilter)) {
+            return false;
+        }
+
+        if (underlyingFilter !== "ALL" && r.underlyingSymbol !== underlyingFilter) {
+            return false;
+        }
+
+        return true;
+
+    });
+
+    for (const r of filtered) {
+
+        const tr = document.createElement("tr");
+
+        tr.innerHTML = `
+            <td>${currentMode === "put" ? "اختیار فروش" : "اختیار خرید"}</td>
+            <td><b>${r.symbol}</b></td>
+            <td>${r.underlyingSymbol}</td>
+            <td>${r.strike.toLocaleString('fa-IR')}</td>
+            <td>${r.days} روز</td>
+            <td>${r.close.toLocaleString('fa-IR')}</td>
+            <td>${r.underlying.toLocaleString('fa-IR')}</td>
+            <td>${r.vol.toLocaleString('fa-IR')}</td>
+            <td>${r.valueM.toLocaleString('fa-IR')}</td>
+            <td>${r.openInt.toLocaleString('fa-IR')}</td>
+            <td><span class="badge ${getBadgeClass(r.moneyStatus)}">${r.moneyStatus}</span></td>
+            <td>${r.leverage}x</td>
+        `;
+
+        tbody.appendChild(tr);
+
+    }
+
+}
+
+function getBadgeClass(status) {
+    if (status.includes("ITM")) return "bg-success";
+    if (status.includes("ATM")) return "bg-warning text-dark";
+    return "bg-danger";
+}
+
+
+// =====================================================
+// خلاصه آماری
+// =====================================================
+
+function updateSummary() {
+
+    let totalCallValue = 0;
+    let totalPutValue = 0;
+
+    for (const r of callRows) totalCallValue += r.valueM;
+    for (const r of putRows) totalPutValue += r.valueM;
+
+    const callValEl = document.getElementById("totalCallValue");
+    const putValEl = document.getElementById("totalPutValue");
+    const activeCountEl = document.getElementById("activeCount");
+
+    if (callValEl) callValEl.innerText = totalCallValue.toLocaleString('fa-IR') + " میلیون";
+    if (putValEl) putValEl.innerText = totalPutValue.toLocaleString('fa-IR') + " میلیون";
+    if (activeCountEl) activeCountEl.innerText = (callRows.length + putRows.length).toLocaleString('fa-IR');
+
+}
+
+
+// =====================================================
+// رویدادها و راه اندازی اولیه
+// =====================================================
 
 document.addEventListener("DOMContentLoaded", () => {
 
-    const scanBtn = document.getElementById("scanButton");
-    if (scanBtn) scanBtn.addEventListener("click", scan);
+    const scanBtn = document.getElementById("scanBtn");
+    if (scanBtn) {
+        scanBtn.addEventListener("click", scan);
+    }
 
-    const minVol = document.getElementById("minVolume");
-    if (minVol) {
-        minVol.addEventListener("change", () => {
-            if (putData.length || callData.length) {
-                scan();
-            }
+    const typeFilter = document.getElementById("typeFilter");
+    if (typeFilter) {
+        typeFilter.addEventListener("change", (e) => {
+            currentMode = e.target.value;
+            renderTable();
         });
     }
 
-    const putBtn = document.getElementById("showPutButton");
-    if (putBtn) putBtn.addEventListener("click", showPutOnly);
+    const symbolFilter = document.getElementById("symbolFilter");
+    if (symbolFilter) {
+        symbolFilter.addEventListener("input", renderTable);
+    }
 
-    const callBtn = document.getElementById("showCallButton");
-    if (callBtn) callBtn.addEventListener("click", showCallOnly);
+    const underlyingFilter = document.getElementById("underlyingFilter");
+    if (underlyingFilter) {
+        underlyingFilter.addEventListener("change", renderTable);
+    }
 
-    const allBtn = document.getElementById("showAllButton");
-    if (allBtn) allBtn.addEventListener("click", showAll);
-
-    // اسکن خودکار در آغاز کار
+    // اسکن اولیه خودکار
     scan();
-
-    // اسکن خودکار هر ۳ دقیقه
-    setInterval(scan, 180000);
 
 });
